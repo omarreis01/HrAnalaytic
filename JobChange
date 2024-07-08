@@ -1,0 +1,858 @@
+#IMPORT LIBRARIES
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import chi2_contingency
+from sklearn.model_selection import train_test_split
+from sklearn.impute import SimpleImputer
+from scipy.stats import spearmanr
+from scipy.stats import pearsonr
+from seaborn import swarmplot
+from sklearn.preprocessing import StandardScaler
+from imblearn.over_sampling import SMOTE
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import f1_score, log_loss
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import precision_score
+from sklearn.metrics import recall_score
+from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import RandomizedSearchCV
+from sklearn.compose import ColumnTransformer,make_column_selector
+from sklearn.preprocessing import OrdinalEncoder,MinMaxScaler
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, AdaBoostClassifier
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.preprocessing import OneHotEncoder
+from scipy import stats
+from sklearn.preprocessing import QuantileTransformer
+from sklearn.impute import KNNImputer
+from sklearn.tree import DecisionTreeClassifier
+import copy
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.naive_bayes import GaussianNB
+from sklearn.model_selection import cross_val_predict
+from sklearn.model_selection import StratifiedKFold, GridSearchCV, learning_curve
+from imblearn.over_sampling import BorderlineSMOTE,KMeansSMOTE,BorderlineSMOTE,ADASYN,RandomOverSampler,SVMSMOTE
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer
+from sklearn.feature_selection import chi2, f_classif, mutual_info_classif, SelectKBest, VarianceThreshold
+
+
+#DATA PREPROCESSING
+
+
+data = pd.read_csv('aug_train.csv')
+
+data
+
+data.isnull().sum()
+
+#Enrolle_id
+data.drop(["enrollee_id"],axis = 1,inplace = True)
+
+#CITY
+data.drop(["city"],axis = 1,inplace = True)
+
+#GENDER
+print(data["gender"].value_counts())
+print("number of NaN values of gender ==",data["gender"].isnull().sum())
+gender_counts = data["gender"].value_counts()
+null_values_count =data["gender"].isnull().sum()
+male_count = gender_counts['Male']
+female_count = gender_counts['Female']
+other_count = gender_counts['Other']
+total_known = male_count + female_count + other_count
+male_proportion = male_count / total_known
+female_proportion = female_count / total_known
+other_proportion = other_count / total_known
+
+# proportions sum should be 0
+proportions = np.array([male_proportion, female_proportion, other_proportion])
+proportions /= proportions.sum()
+
+nan_indices = data[data['gender'].isna()].index
+
+data.loc[nan_indices, 'gender'] = np.random.choice(['Male', 'Female', 'Other'], size=len(nan_indices), p=proportions)
+
+data = pd.get_dummies(data, columns=['gender'])
+
+
+print(data["relevent_experience"].value_counts())
+print("number of null values of relevant_experience =",data["relevent_experience"].isnull().sum())
+# RELEVANT_EXPERIENCE
+data["relevent_experience_new"] = np.where(data["relevent_experience"] == "Has relevent experience", 1, 0)
+data.drop(["relevent_experience"], axis=1, inplace=True)
+
+print(data["enrolled_university"].value_counts())
+print("number of null values for enrolled_university ==",data["enrolled_university"].isnull().sum())
+print(data["education_level"].value_counts())
+print("number of null values for education_level ==",data["education_level"].isnull().sum())
+print(data["major_discipline"].value_counts())
+print("number of null values for major_discipline ==",data["major_discipline"].isnull().sum())
+
+
+data["enrolled_university"].fillna("Unknown", inplace=True)
+data["education_level"].fillna("Unknown", inplace=True)
+data["major_discipline"].fillna("Unknown", inplace=True)
+
+
+#Custom imputation
+for index in data.index:
+    if (data.loc[index, "enrolled_university"] == "Unknown" and (data.loc[index, "education_level"] == "Primary School"or data.loc[index, "education_level"] == "High School"or data.loc[index, "major_discipline"] == "No Major")):
+        data.loc[index, "enrolled_university"] = "no_enrollment"
+
+    if (
+        data.loc[index, "education_level"] == "Unknown"
+        and (
+            data.loc[index, "enrolled_university"] == "no_enrollment"
+            or data.loc[index, "major_discipline"] == "No Major"
+        )
+    ):
+        data.loc[index, "education_level"] = "NOT GRADUATE"
+
+    if (
+        data.loc[index, "major_discipline"] == "Unknown"
+        and (
+            data.loc[index, "enrolled_university"] == "no_enrollment"
+            or data.loc[index, "education_level"] == "High School"
+            or data.loc[index, "education_level"] == "Primary School"
+        )
+    ):
+        data.loc[index, "major_discipline"] = "No Major"
+education_counts = data["education_level"].value_counts()
+
+high_school_number =education_counts.get("High School")
+primary_school_number =education_counts.get("Primary School")
+
+portion = high_school_number / (high_school_number + primary_school_number) +1
+
+education_level_mapping = {
+	"Unknown":np.nan,
+    "Primary School": 1,
+    "High School": 2,
+	"NOT GRADUATE":portion,
+    "Graduate": 4,
+    "Masters": 5,
+    "Phd": 6,
+}
+enrollment_mapping = {
+	"Unknown":np.nan,
+    "Full time course": 2,
+    "Part time course": 1,
+    "no_enrollment": 0,
+}
+
+#EDUCATION LEVEL AND ENROLLED UNIVERSITY
+data["education_level"] = data["education_level"].map(education_level_mapping)
+data["enrolled_university"] = data["enrolled_university"].map(enrollment_mapping)
+data['major_discipline'] = data['major_discipline'].replace('Unknown', np.nan)
+
+#number of null values
+print("number of null values for enrolled_university ==",data["enrolled_university"].isnull().sum())
+print("number of null values for education_level ==",data["education_level"].isnull().sum())
+print("number of null values for major_discipline ==",data["major_discipline"].isnull().sum())
+
+# MAJOR DISCIPLINE
+# Assuming 'data' is your DataFrame
+simpleImputer = SimpleImputer(strategy="most_frequent")
+
+# Reshape the data to be a 2D array
+major_discipline_reshaped = data["major_discipline"].values.reshape(-1, 1)
+
+# Apply the SimpleImputer
+imputed_data = simpleImputer.fit_transform(major_discipline_reshaped)
+
+# Convert the result back to a 1D array and assign it back to the DataFrame
+data["major_discipline"] = imputed_data.ravel()
+
+data = pd.get_dummies(data, columns=['major_discipline'])
+
+
+# EXPERIENCE
+print(data["experience"].value_counts())
+print("number of nan values for experience =",data["experience"].isnull().sum())
+
+data["experience"].fillna("Unknown", inplace=True)
+data['experience'] = data['experience'].replace({'>20': 21, '<1': 0,"Unknown":np.nan})
+
+
+print(data["company_size"].value_counts())
+print("number of null value for company size ==",data["company_size"].isnull().sum())
+
+#COMPANY SIZE
+data['company_size'].fillna('Unknown', inplace=True)
+
+company_size_mapping = {
+    "Unknown": np.nan,
+    "10/49": 1,
+    "50-99": 2,
+    "100-500": 3,
+    "500-999": 4,
+    "1000-4999": 5,
+    "5000-9999": 6,
+    "10000+": 7
+}
+
+data["company_size"] = data["company_size"].map(company_size_mapping)
+
+print(data["company_type"].value_counts())
+print(data["company_type"].isnull().sum())
+data["company_type"].fillna("Unknown", inplace=True)
+data = pd.get_dummies(data, columns=['company_type'])
+
+# LAST_NEW_JOB
+print(data["last_new_job"].value_counts())
+print("number of nan values for last_new_job ==",data["last_new_job"].isnull().sum())
+
+data["last_new_job"].fillna("Unknown", inplace=True)
+
+def convert_last_new_job(my_str):
+  if my_str == "Unknown":
+    return np.nan
+  elif my_str == "never":
+    return 0
+  elif my_str ==">4":
+    return 5
+  else:
+    return int(my_str)
+
+data['last_new_job'] = data['last_new_job'].map(convert_last_new_job)
+
+plt.figure(figsize=(4, 6))
+
+
+# Plot 1: City before transformation
+plt.subplot(4, 1, 1)
+sns.kdeplot(data['city_development_index'], fill=True, color='skyblue')
+plt.xlabel('City Development Index (Before)', fontsize=12)
+plt.ylabel('Density', fontsize=8)
+plt.title('City Development Index Distribution Before Transformation', fontsize=12)
+
+# Plot 2: Training hours before transformation
+plt.subplot(4, 1, 3)
+sns.kdeplot(data['training_hours'], fill=True, color='skyblue')
+plt.xlabel('Training Hours (Before)', fontsize=12)
+plt.ylabel('Density', fontsize=8)
+plt.title('Training Hours Distribution Before Transformation', fontsize=12)
+
+data['training_hours'] = np.log1p(data['training_hours'])
+
+#grafigi distributed olmadı, değerler birbirine çok yakın çıktı (score'u düşürdü)
+#qt = QuantileTransformer(output_distribution='uniform', random_state=0)
+#data['training_hours'] = qt.fit_transform(data[['training_hours']])
+
+qt = QuantileTransformer(output_distribution='uniform', random_state=0)
+data['city_development_index'] = qt.fit_transform(data[['city_development_index']])
+
+# distributed olmadi
+#X["city_development_index"] = np.log(X["city_development_index"])
+
+# Plot 3: City after transformation
+plt.subplot(4, 1, 2)
+sns.kdeplot(data['city_development_index'], fill=True, color='skyblue')
+plt.xlabel('City Development Index (After)', fontsize=12)
+plt.ylabel('Density', fontsize=8)
+plt.title('City Development Index Distribution After Transformation', fontsize=12)
+
+# Plot 4: Training hours after transformation
+plt.subplot(4, 1, 4)
+sns.kdeplot(data['training_hours'], fill=True, color='skyblue')
+plt.xlabel('Training Hours (After)', fontsize=12)
+plt.ylabel('Density', fontsize=8)
+plt.title('Training Hours Distribution After Transformation', fontsize=12)
+
+# Adjust layout for better spacing between plots
+plt.tight_layout()
+
+plt.show()
+
+data.isnull().sum()
+
+data = data.astype(float)
+
+X= data.drop(["target"],axis = 1)
+y = data["target"]
+
+
+## HANDLE MISSING VALUES with KNN_imputer
+
+#cross val score = 0.809 (rfc)
+knn_imputer = KNNImputer(n_neighbors=5)
+imputed_data = knn_imputer.fit_transform(X)
+
+#cross val score = 0.804 (rfc)
+#iterative_imputer = IterativeImputer(max_iter=10, random_state=42)
+#imputed_data = iterative_imputer.fit_transform(X)
+
+
+X = pd.DataFrame(imputed_data, columns=X.columns)
+
+X.isnull().sum()
+
+*FEATURE* *SELECTION*
+
+print(len(X.columns))
+
+X
+
+
+# Separate continuous and categorical features
+continuous_features = ['training_hours', 'city_development_index']
+categorical_features = list(set(X.columns) - set(continuous_features))
+
+# Correlation Matrix for continuous features
+corr_matrix = data[continuous_features + ['target']].corr()
+threshold = 0.01
+relevant_features_corr = corr_matrix[abs(corr_matrix['target']) > threshold].index
+selected_features_corr = relevant_features_corr.drop('target')
+print("Selected continuous features based on correlation threshold:")
+print(selected_features_corr)
+print(len(selected_features_corr))
+
+# Chi-Square Test for categorical features
+chi2_selector = SelectKBest(chi2, k=15)
+chi2_selector.fit_transform(X[categorical_features], y)
+selected_features_chi2 = X[categorical_features].columns[chi2_selector.get_support()]
+print("Selected categorical features based on Chi-Square Test:")
+print(selected_features_chi2)
+
+# Mutual Information for all features
+mi_selector = SelectKBest(mutual_info_classif, k=15)
+mi_selector.fit_transform(X, y)
+selected_features_mi = X.columns[mi_selector.get_support()]
+print("Selected features based on Mutual Information:")
+print(selected_features_mi)
+
+# Variance Threshold for continuous features
+threshold = 0.05
+var_threshold = VarianceThreshold(threshold=threshold)
+var_threshold.fit_transform(X[continuous_features])
+selected_features_var = X[continuous_features].columns[var_threshold.get_support()]
+print("Selected continuous features based on Variance Threshold:")
+print(selected_features_var)
+print(len(selected_features_var))
+
+
+# Combine all selected features
+selected_features_all = set(selected_features_corr) | set(selected_features_chi2) | set(selected_features_mi) | set(selected_features_var)
+
+# Original features
+original_features = set(X.columns)
+
+# Find features not selected by any method
+least_selected_features = original_features - selected_features_all
+
+
+boosting_selected_features = set()
+boosting_selected_features.add('major_discipline_Arts')
+
+
+least_selected_features_list = list(least_selected_features | boosting_selected_features)
+
+print(least_selected_features)
+
+company_type_early stage startup --- major_discipline_Other
+
+X.drop(columns = least_selected_features_list,inplace = True)
+
+X.isnull().sum()
+
+bins = [-1, 5, 10, 15, 20, float("inf")]
+labels = [1, 2, 3, 4, 5]
+
+# Create binned experience
+X['experience'] = pd.cut(X['experience'], bins=bins, labels=labels, right=False)
+X["experience"].fillna(1,inplace = True)
+
+X_arr = np.array(X)
+y_arr = np.array(y)
+
+
+X_train, X_temp, y_train, y_temp = train_test_split(X_arr, y_arr, test_size=0.2, stratify=y)
+X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.2, stratify=y_temp)
+
+x_train_temp = pd.DataFrame(X_train, columns=X.columns)
+y_train_temp = pd.DataFrame(y_train, columns=["target"])
+x_val_temp = pd.DataFrame(X_val, columns=X.columns)
+y_val_temp = pd.DataFrame(y_val, columns=["target"])
+x_test_temp = pd.DataFrame(X_test, columns=X.columns)
+y_test_temp = pd.DataFrame(y_test, columns=["target"])
+
+
+SCALING
+
+
+numerical_features = ["city_development_index","training_hours","enrolled_university","education_level","experience","company_size","last_new_job"]
+
+
+# Initialize the MinMaxScaler(Gaussian distribution yok)
+scaler = MinMaxScaler()
+
+# Fit and transform the selected columns
+scaler.fit(x_train_temp[numerical_features])
+
+
+# Transform the training, validation, and test data
+x_train_temp[numerical_features] = scaler.transform(x_train_temp[numerical_features])
+x_val_temp[numerical_features] = scaler.transform(x_val_temp[numerical_features])
+x_test_temp[numerical_features] = scaler.transform(x_test_temp[numerical_features])
+
+# Convert the result back to DataFrames
+X_train = pd.DataFrame(x_train_temp, columns=X.columns)
+X_val = pd.DataFrame(x_val_temp, columns=X.columns)
+X_test = pd.DataFrame(x_test_temp, columns=X.columns)
+
+OVERSAMPLING
+
+#scorelar RandomForestClassifier'da denendi.
+
+#without oversampling --> score = 0.762(f1)
+
+#adasyn = ADASYN()
+#x_train, y_train = adasyn.fit_resample(X_train, y_train) #--> score =0.778(f1)
+
+#borderline_smote = BorderlineSMOTE()
+#x_train, y_train = borderline_smote.fit_resample(X_train, y_train) #--> score =0.782(f1)
+
+#ros = RandomOverSampler()
+#x_train, y_train = ros.fit_resample(X_train, y_train) # --> score = 0.735(f1)
+
+svm_smote = SVMSMOTE()
+x_train, y_train = svm_smote.fit_resample(X_train, y_train) # --> score = 0.804(f1)
+
+#smote = SMOTE()
+#x_train,y_train = smote.fit_resample(X_train,y_train) # --> score = 0.795(f1)
+
+x_train = pd.DataFrame(x_train, columns=X.columns)
+y_train = pd.DataFrame(y_train, columns=["target"])
+y_train = y_train.values.ravel() #convert it to 1d Array
+
+
+
+#BOOSTING ALGORITHM TO SELECT BEST FEATURES(FEATURE IMPORTANCE)
+
+# Train the Gradient Boosting model
+gb = GradientBoostingClassifier()
+gb.fit(x_train, y_train)
+
+# Get feature importances
+feature_importances_gb = gb.feature_importances_
+
+# Create a DataFrame for better visualization
+importances_gb_df = pd.DataFrame({
+    'Feature': x_train.columns,
+    'Importance': feature_importances_gb
+}).sort_values(by='Importance', ascending=False)
+
+#print(importances_gb_df)
+
+#------------------
+
+# Train the XGBoost model
+xgboost_model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+xgboost_model.fit(x_train, y_train)
+
+# Get feature importances
+feature_importances_xgb = xgboost_model.feature_importances_
+
+# Create a DataFrame for better visualization
+importances_xgb_df = pd.DataFrame({
+    'Feature': x_train.columns,
+    'Importance': feature_importances_xgb
+}).sort_values(by='Importance', ascending=False)
+
+#print(importances_xgb_df)
+
+#------------------
+
+# Train the LightGBM model
+lgb_model = lgb.LGBMClassifier()
+lgb_model.fit(x_train,y_train)
+
+# Get feature importances
+feature_importances_lgb = lgb_model.feature_importances_
+
+# Create a DataFrame for better visualization
+importances_lgb_df = pd.DataFrame({
+    'Feature': x_train.columns,
+    'Importance': feature_importances_lgb
+}).sort_values(by='Importance', ascending=False)
+
+#print(importances_lgb_df)
+
+
+#plotting
+
+# Example for Gradient Boosting
+sns.barplot(x='Importance', y='Feature', data=importances_gb_df)
+plt.title('Feature Importance (Gradient Boosting)')
+plt.show()
+
+# Example for XGBoost
+sns.barplot(x='Importance', y='Feature', data=importances_xgb_df)
+plt.title('Feature Importance (XGBoost)')
+plt.show()
+
+# Example for LightGBM
+sns.barplot(x='Importance', y='Feature', data=importances_lgb_df)
+plt.title('Feature Importance (LightGBM)')
+plt.show()
+
+
+
+#HYPERPARAMETER TUNING WITH GRIDSEARCHCV
+
+
+
+models = [
+    LogisticRegression(),
+    KNeighborsClassifier(),
+    RandomForestClassifier(),
+    GradientBoostingClassifier(),
+    AdaBoostClassifier()
+]
+
+
+models_hyperparameters = {
+          "logistic_regression": {
+        'C': [0.01, 0.1, 1],
+        'penalty': ['l1', 'l2']
+
+    },
+    "k_neighbors": {
+        'n_neighbors': [5, 6, 7, 10],
+        'weights': ['uniform', 'distance']
+    },
+    "random_forest": {
+        'n_estimators': [4, 20,100],
+        'max_depth': [10],
+        'min_samples_leaf': [20, 30],
+        'max_features': [7, 8]
+    },
+          "gradient_boosting": {
+        'n_estimators': [20,50,100, 200],
+        'learning_rate': [0.1, 0.01,0.001],
+        'max_depth': [3, 4,7,10]
+    },
+        "ada_boost": {
+        'n_estimators': [100, 200],
+        'learning_rate': [0.1, 0.01]
+    },
+}
+
+
+models_keys = list(models_hyperparameters.keys())
+
+
+def ModelSelection(models, models_hyperparameters, X_train, y_train, X_val, y_val):
+    result = []
+    i = 0
+    for model in models:
+        key = list(models_hyperparameters.keys())[i]
+        hyperparameters = models_hyperparameters[key]
+        classifier = GridSearchCV(model, hyperparameters, cv=5)
+        classifier.fit(X_train, y_train)
+        i += 1
+        print(model)
+        print(i)
+        result.append({
+            'model used': model,
+            'highest score': classifier.best_score_,
+            'best hyperparameters': classifier.best_params_,
+            'validation score': classifier.score(X_val, y_val)
+        })
+    result_dataframe = pd.DataFrame(result, columns=['model used', 'highest score', 'best hyperparameters', 'validation score'])
+    return result_dataframe
+
+x= ModelSelection(models, models_hyperparameters, x_train, y_train, x_val_temp, y_val)
+print(x)
+x = pd.DataFrame(x)
+
+#CROSS VALIDATION
+
+
+models = [
+    LogisticRegression(C= 0.1, penalty= 'l2'),
+    KNeighborsClassifier(n_neighbors= 6, weights= 'distance'),
+    RandomForestClassifier(n_estimators=100, min_samples_leaf=20, max_features=8, max_depth=10),
+    SVC(),
+    GradientBoostingClassifier(learning_rate = 0.1, max_depth = 7, n_estimators = 100),
+    AdaBoostClassifier(learning_rate = 0.1, n_estimators = 200)
+]
+def cv_evaluate_model(models, X, y):
+    results = []
+    for model in models:
+        y_pred = cross_val_predict(model, X, y, cv=5)
+        f1 = f1_score(y, y_pred, average='weighted')
+        accuracy = accuracy_score(y, y_pred)
+        recall = recall_score(y, y_pred, average='weighted')
+        precision = precision_score(y, y_pred, average='weighted')
+        results.append({
+            'Model': model.__class__.__name__,
+            'F1 Score': f1,
+            'Accuracy': accuracy,
+            'Recall': recall,
+            'Precision': precision
+        })
+    return pd.DataFrame(results)
+
+
+
+cv_results = cv_evaluate_model(models, x_train, y_train)
+print(cv_results)
+
+#MODEL EVALUATION
+
+
+
+models = [
+    LogisticRegression(C= 0.1, penalty= 'l2'),
+    KNeighborsClassifier(n_neighbors= 6, weights= 'distance'),
+    RandomForestClassifier(n_estimators=100, min_samples_leaf=20, max_features=8, max_depth=10),
+    SVC(),
+    GradientBoostingClassifier(learning_rate = 0.1, max_depth = 7, n_estimators = 100),
+    AdaBoostClassifier(learning_rate = 0.1, n_estimators = 200)
+]
+def evaluate_model(models,X_train,y_train,X_test,y_test):
+    for model in models:
+
+        model.fit(X_train, y_train)
+
+        test_data_prediction = model.predict(X_test)
+
+        cf_matrix = confusion_matrix(y_test, test_data_prediction)
+        #sns.heatmap(cf_matrix, annot=True)
+        plt.show()
+        f1_score_test_data = f1_score(y_test, test_data_prediction, average='weighted')
+
+        accuracy = accuracy_score(y_test, test_data_prediction)
+        recall = recall_score(y_test, test_data_prediction, average='weighted')
+        precision = precision_score(y_test, test_data_prediction, average='weighted')
+        print("model ==",model)
+        print("f1 == ",f1_score_test_data)
+
+evaluate_model(models,x_train,y_train,X_test,y_test)
+
+
+#LOOKING FOR OVERFITTING(GRAPHICAL)
+
+GRADIENT BOOSTING CLASSIFIER
+
+GBC = GradientBoostingClassifier(learning_rate = 0.1, max_depth = 7, n_estimators = 100)
+
+#to control, model is good for random data set (it does not)
+#random_array = np.random.choice([0, 1], size=(20132,))
+
+GBC.fit(x_train, y_train)
+
+# Evaluate on the validation set
+y_val_pred = GBC.predict(X_val)
+val_f1 = f1_score(y_val, y_val_pred, average='weighted')
+val_accuracy = accuracy_score(y_val, y_val_pred)
+val_recall = recall_score(y_val, y_val_pred, average='weighted')
+val_precision = precision_score(y_val, y_val_pred, average='weighted')
+
+print(f"Validation F1 Score: {val_f1:.4f}")
+print(f"Validation Accuracy: {val_accuracy:.4f}")
+print(f"Validation Recall: {val_recall:.4f}")
+print(f"Validation Precision: {val_precision:.4f}")
+
+# Evaluate on the test set
+y_test_pred = GBC.predict(X_test)
+test_f1 = f1_score(y_test, y_test_pred, average='weighted')
+test_accuracy = accuracy_score(y_test, y_test_pred)
+test_recall = recall_score(y_test, y_test_pred, average='weighted')
+test_precision = precision_score(y_test, y_test_pred, average='weighted')
+
+print(f"Test F1 Score: {test_f1:.4f}")
+print(f"Test Accuracy: {test_accuracy:.4f}")
+print(f"Test Recall: {test_recall:.4f}")
+print(f"Test Precision: {test_precision:.4f}")
+
+
+# Plot learning curves
+def plot_learning_curve(estimator, X, y, title):
+    train_sizes, train_scores, val_scores = learning_curve(estimator, X, y, cv=5, n_jobs=1, train_sizes=np.linspace(0.1, 1.0, 10), scoring='f1_weighted')
+    train_scores_mean = np.mean(train_scores, axis=1)
+    train_scores_std = np.std(train_scores, axis=1)
+    val_scores_mean = np.mean(val_scores, axis=1)
+    val_scores_std = np.std(val_scores, axis=1)
+
+    plt.figure()
+    plt.title(title)
+    plt.xlabel("Training examples")
+    plt.ylabel("Score")
+    plt.grid()
+
+    plt.fill_between(train_sizes, train_scores_mean - train_scores_std, train_scores_mean + train_scores_std, alpha=0.1, color="r")
+    plt.fill_between(train_sizes, val_scores_mean - val_scores_std, val_scores_mean + val_scores_std, alpha=0.1, color="g")
+    plt.plot(train_sizes, train_scores_mean, 'o-', color="r", label="Training score")
+    plt.plot(train_sizes, val_scores_mean, 'o-', color="g", label="Cross-validation score")
+
+    plt.legend(loc="best")
+    return plt
+
+plot_learning_curve(GBC, x_train, y_train, title="Learning Curve for GradientBoostingClassifier")
+plt.show()
+
+
+# Function to plot learning curve using log loss
+def plot_learning_curve_loss(estimator, X, y, title="Learning Curve"):
+    train_sizes, train_scores, val_scores = learning_curve(
+        estimator, X, y, cv=5, n_jobs=-1, train_sizes=np.linspace(0.1, 1.0, 10), scoring='neg_log_loss'
+    )
+
+    # Convert scores to positive losses
+    train_losses = -train_scores
+    val_losses = -val_scores
+
+    train_losses_mean = np.mean(train_losses, axis=1)
+    train_losses_std = np.std(train_losses, axis=1)
+    val_losses_mean = np.mean(val_losses, axis=1)
+    val_losses_std = np.std(val_losses, axis=1)
+
+    plt.figure()
+    plt.title(title)
+    plt.xlabel("Training examples")
+    plt.ylabel("Loss")
+    plt.grid()
+
+    plt.fill_between(train_sizes, train_losses_mean - train_losses_std, train_losses_mean + train_losses_std, alpha=0.1, color="r")
+    plt.fill_between(train_sizes, val_losses_mean - val_losses_std, val_losses_mean + val_losses_std, alpha=0.1, color="g")
+    plt.plot(train_sizes, train_losses_mean, 'o-', color="r", label="Training loss")
+    plt.plot(train_sizes, val_losses_mean, 'o-', color="g", label="Cross-validation loss")
+
+    plt.legend(loc="best")
+    return plt
+
+GBC.fit(x_train, y_train)
+
+# Evaluate on the validation set
+y_val_pred_proba = GBC.predict_proba(X_val)
+val_log_loss = log_loss(y_val, y_val_pred_proba)
+
+print(f"Validation Log Loss: {val_log_loss:.4f}")
+
+# Evaluate on the test set
+y_test_pred_proba = GBC.predict_proba(X_test)
+test_log_loss = log_loss(y_test, y_test_pred_proba)
+
+print(f"Test Log Loss: {test_log_loss:.4f}")
+
+# Plot learning curve using log loss
+plot_learning_curve_loss(GBC, x_train, y_train, title="Learning Curve for GradientBoostingClassifier with Log Loss")
+plt.show()
+
+RANDOM FOREST CLASSIFIER
+
+RFC =RandomForestClassifier(n_estimators=100, min_samples_leaf=20, max_features=8, max_depth=10)
+
+
+#to control, model is good for random data set (it does not)
+#random_array = np.random.choice([0, 1], size=(20132,))
+
+RFC.fit(x_train, y_train)
+
+# Evaluate on the validation set
+y_val_pred = RFC.predict(X_val)
+val_f1 = f1_score(y_val, y_val_pred, average='weighted')
+val_accuracy = accuracy_score(y_val, y_val_pred)
+val_recall = recall_score(y_val, y_val_pred, average='weighted')
+val_precision = precision_score(y_val, y_val_pred, average='weighted')
+
+print(f"Validation F1 Score: {val_f1:.4f}")
+print(f"Validation Accuracy: {val_accuracy:.4f}")
+print(f"Validation Recall: {val_recall:.4f}")
+print(f"Validation Precision: {val_precision:.4f}")
+
+# Evaluate on the test set
+y_test_pred = RFC.predict(X_test)
+test_f1 = f1_score(y_test, y_test_pred, average='weighted')
+test_accuracy = accuracy_score(y_test, y_test_pred)
+test_recall = recall_score(y_test, y_test_pred, average='weighted')
+test_precision = precision_score(y_test, y_test_pred, average='weighted')
+
+print(f"Test F1 Score: {test_f1:.4f}")
+print(f"Test Accuracy: {test_accuracy:.4f}")
+print(f"Test Recall: {test_recall:.4f}")
+print(f"Test Precision: {test_precision:.4f}")
+
+
+# Plot learning curves
+def plot_learning_curve(estimator, X, y, title):
+    train_sizes, train_scores, val_scores = learning_curve(estimator, X, y, cv=5, n_jobs=1, train_sizes=np.linspace(0.1, 1.0, 10), scoring='f1_weighted')
+    train_scores_mean = np.mean(train_scores, axis=1)
+    train_scores_std = np.std(train_scores, axis=1)
+    val_scores_mean = np.mean(val_scores, axis=1)
+    val_scores_std = np.std(val_scores, axis=1)
+
+    plt.figure()
+    plt.title(title)
+    plt.xlabel("Training examples")
+    plt.ylabel("Score")
+    plt.grid()
+
+    plt.fill_between(train_sizes, train_scores_mean - train_scores_std, train_scores_mean + train_scores_std, alpha=0.1, color="r")
+    plt.fill_between(train_sizes, val_scores_mean - val_scores_std, val_scores_mean + val_scores_std, alpha=0.1, color="g")
+    plt.plot(train_sizes, train_scores_mean, 'o-', color="r", label="Training score")
+    plt.plot(train_sizes, val_scores_mean, 'o-', color="g", label="Cross-validation score")
+
+    plt.legend(loc="best")
+    return plt
+
+plot_learning_curve(RFC, x_train, y_train, title="Learning Curve for RandomForestClassifier")
+plt.show()
+
+
+# Function to plot learning curve using log loss
+def plot_learning_curve_loss(estimator, X, y, title="Learning Curve"):
+    train_sizes, train_scores, val_scores = learning_curve(
+        estimator, X, y, cv=5, n_jobs=-1, train_sizes=np.linspace(0.1, 1.0, 10), scoring='neg_log_loss'
+    )
+
+    # Convert scores to positive losses
+    train_losses = -train_scores
+    val_losses = -val_scores
+
+    train_losses_mean = np.mean(train_losses, axis=1)
+    train_losses_std = np.std(train_losses, axis=1)
+    val_losses_mean = np.mean(val_losses, axis=1)
+    val_losses_std = np.std(val_losses, axis=1)
+
+    plt.figure()
+    plt.title(title)
+    plt.xlabel("Training examples")
+    plt.ylabel("Loss")
+    plt.grid()
+
+    plt.fill_between(train_sizes, train_losses_mean - train_losses_std, train_losses_mean + train_losses_std, alpha=0.1, color="r")
+    plt.fill_between(train_sizes, val_losses_mean - val_losses_std, val_losses_mean + val_losses_std, alpha=0.1, color="g")
+    plt.plot(train_sizes, train_losses_mean, 'o-', color="r", label="Training loss")
+    plt.plot(train_sizes, val_losses_mean, 'o-', color="g", label="Cross-validation loss")
+
+    plt.legend(loc="best")
+    return plt
+
+RFC.fit(x_train, y_train)
+
+# Evaluate on the validation set
+y_val_pred_proba = RFC.predict_proba(X_val)
+val_log_loss = log_loss(y_val, y_val_pred_proba)
+
+print(f"Validation Log Loss: {val_log_loss:.4f}")
+
+# Evaluate on the test set
+y_test_pred_proba = RFC.predict_proba(X_test)
+test_log_loss = log_loss(y_test, y_test_pred_proba)
+
+print(f"Test Log Loss: {test_log_loss:.4f}")
+
+# Plot learning curve using log loss
+plot_learning_curve_loss(RFC, x_train, y_train, title="Learning Curve for RandomForestClassifier with Log Loss")
+plt.show()
